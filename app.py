@@ -1,20 +1,19 @@
 import math
-import numpy as np
 import pandas as pd
+import numpy as np
 import streamlit as st
-from io import BytesIO
-from PIL import Image, ImageDraw
-from streamlit_drawable_canvas import st_canvas
+from PIL import Image
+import streamlit_image_coordinates as stic
 
-# -----------------------------------
+# ------------------------------------------------------
 # ページ設定
-# -----------------------------------
+# ------------------------------------------------------
 st.set_page_config(page_title="バスケ シュート集計", layout="wide")
-st.title("🏀 シュートエリア集計アプリ（タップで記録）")
+st.title("🏀 シュートエリア集計アプリ（クリックで記録）")
 
-# -----------------------------------
-# コート定義
-# -----------------------------------
+# ------------------------------------------------------
+# 定数設定（画像サイズとリング位置）
+# ------------------------------------------------------
 W, H = 600, 500
 HOOP_X, HOOP_Y = W // 2, 60
 RIM_R = 7
@@ -23,104 +22,73 @@ PAINT_H = 190
 ARC_R = 237
 CORNER_3_Y = HOOP_Y + 140
 
-# -----------------------------------
-# コート背景画像生成
-# -----------------------------------
-def make_court_image():
-    img = Image.new("RGB", (W, H), (234, 179, 93))
-    drw = ImageDraw.Draw(img)
-
-    # ペイント
-    left, right = HOOP_X - PAINT_W // 2, HOOP_X + PAINT_W // 2
-    top, bottom = HOOP_Y, HOOP_Y + PAINT_H
-    drw.rectangle([left, top, right, bottom], outline=(255, 255, 255), width=3)
-
-    # リング
-    drw.ellipse(
-        [HOOP_X - RIM_R, HOOP_Y - RIM_R, HOOP_X + RIM_R, HOOP_Y + RIM_R],
-        outline=(255, 80, 80), width=3,
-    )
-
-    # 3Pアーク
-    bbox = [HOOP_X - ARC_R, HOOP_Y - ARC_R, HOOP_X + ARC_R, HOOP_Y + ARC_R]
-    drw.arc(bbox, start=200, end=-20, fill=(255, 255, 255), width=3)
-
-    # コーナー3P
-    drw.line([(left, HOOP_Y), (left, CORNER_3_Y)], fill=(255, 255, 255), width=3)
-    drw.line([(right, HOOP_Y), (right, CORNER_3_Y)], fill=(255, 255, 255), width=3)
-
-    drw.text((10, 10), "タップで記録 / クリック位置を判定してゾーン集計", fill=(0, 0, 0))
-    return img
-
-# ✅ 修正済み：NumPy配列に変換して渡す（PILやBytesIOではなく）
-bg_img_pil = make_court_image()
-bg_img = np.array(bg_img_pil)
-
-# -----------------------------------
-# ゾーン判定
-# -----------------------------------
+# ------------------------------------------------------
+# ゾーン分類関数
+# ------------------------------------------------------
 def classify_zone(x, y):
+    """クリック座標 (x, y) をゾーンに分類する"""
     d = math.hypot(x - HOOP_X, y - HOOP_Y)
     left = HOOP_X - PAINT_W // 2
     right = HOOP_X + PAINT_W // 2
 
+    # コーナー3
     if (x <= left or x >= right) and (y >= CORNER_3_Y):
         return "3P"
+    # アーク外
     if d >= ARC_R:
         return "3P"
-
-    paint_top, paint_bottom = HOOP_Y, HOOP_Y + PAINT_H
-    if (left <= x <= right) and (paint_top <= y <= paint_bottom):
+    # ペイント内
+    if (left <= x <= right) and (HOOP_Y <= y <= HOOP_Y + PAINT_H):
         return "2P_paint"
+    # それ以外
     return "2P_mid"
 
-# -----------------------------------
-# セッション管理
-# -----------------------------------
+# ------------------------------------------------------
+# セッション状態（記録を保持）
+# ------------------------------------------------------
 if "shots" not in st.session_state:
     st.session_state.shots = pd.DataFrame(columns=["x", "y", "zone", "made"])
 
+# ------------------------------------------------------
+# サイドバー入力
+# ------------------------------------------------------
 st.sidebar.header("入力オプション")
-made_next = st.sidebar.selectbox("次のタップ：成功/失敗", ["成功（Made）", "失敗（Miss）"])
+made_next = st.sidebar.selectbox("次のクリック：成功/失敗", ["成功（Made）", "失敗（Miss）"])
 made_flag = "成功" in made_next
+
+# ------------------------------------------------------
+# コート画像の読み込み
+# ------------------------------------------------------
+try:
+    court_img = Image.open("court.png")
+except FileNotFoundError:
+    st.error("❌ court.png が見つかりません。アプリと同じフォルダに置いてください。")
+    st.stop()
 
 col_canvas, col_table = st.columns([3, 2])
 
-# -----------------------------------
-# Canvas
-# -----------------------------------
+# ------------------------------------------------------
+# クリック処理部分
+# ------------------------------------------------------
 with col_canvas:
-    st.subheader("コート（タップで記録）")
-    canvas_result = st_canvas(
-        fill_color="rgba(255, 0, 0, 0.6)",
-        stroke_width=10,
-        background_image=bg_img,  # ✅ NumPy配列で渡す
-        update_streamlit=True,
-        drawing_mode="point",
-        width=W,
-        height=H,
-        key="court",
-    )
+    st.subheader("コート画像をクリックして記録")
+    coords = stic.streamlit_image_coordinates(court_img, key="court")
 
-    # クリック処理
-    if canvas_result.json_data is not None:
-        objs = canvas_result.json_data.get("objects", [])
-        if len(objs) > 0:
-            last = objs[-1]
-            x = float(last.get("left", 0))
-            y = float(last.get("top", 0))
-            zone = classify_zone(x, y)
-            if st.session_state.shots.empty or (
-                abs(st.session_state.shots.iloc[-1]["x"] - x) > 1 or
-                abs(st.session_state.shots.iloc[-1]["y"] - y) > 1
-            ):
-                new_row = {"x": x, "y": y, "zone": zone, "made": made_flag}
-                st.session_state.shots = pd.concat(
-                    [st.session_state.shots, pd.DataFrame([new_row])],
-                    ignore_index=True,
-                )
+    if coords is not None:
+        x, y = coords["x"], coords["y"]
+        zone = classify_zone(x, y)
+        # 連続クリック防止
+        if st.session_state.shots.empty or (
+            abs(st.session_state.shots.iloc[-1]["x"] - x) > 1 or
+            abs(st.session_state.shots.iloc[-1]["y"] - y) > 1
+        ):
+            new_row = {"x": x, "y": y, "zone": zone, "made": made_flag}
+            st.session_state.shots = pd.concat(
+                [st.session_state.shots, pd.DataFrame([new_row])],
+                ignore_index=True,
+            )
 
-    # ボタン操作
+    # 操作ボタン
     c1, c2, c3 = st.columns(3)
     if c1.button("直前の1本を取り消し"):
         if not st.session_state.shots.empty:
@@ -135,13 +103,13 @@ with col_canvas:
     ):
         pass
 
-# -----------------------------------
+# ------------------------------------------------------
 # 集計表示
-# -----------------------------------
+# ------------------------------------------------------
 with col_table:
     st.subheader("ゾーン別 集計")
     if st.session_state.shots.empty:
-        st.info("まだ記録がありません。コートをタップして記録してください。")
+        st.info("まだ記録がありません。コートをクリックしてください。")
     else:
         g = st.session_state.shots.groupby("zone").agg(
             attempts=("made", "count"),
