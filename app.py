@@ -1,11 +1,18 @@
 """Streamlit app for importing, classifying, and analysing basketball shots."""
 from __future__ import annotations
 
+from pathlib import Path
+import sys
 from typing import Any, Dict, Iterable, List, Literal
 
 import pandas as pd
 import streamlit as st
 from PIL import Image
+
+# Ensure local modules are importable when Streamlit adjusts the working directory.
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 try:
     import matplotlib.pyplot as plt
