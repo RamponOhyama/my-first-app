@@ -3,10 +3,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 from PIL import Image
+
+try:
+    import matplotlib.pyplot as plt
+except ModuleNotFoundError as exc:
+    st.error(
+        "matplotlib が必要です。環境にインストールされていない場合は `pip install matplotlib` を実行してください。"
+    )
+    st.stop()
 
 from components import sidebar_filters
 from storage import normalize_columns, read_csv, write_csv
@@ -206,7 +213,14 @@ def render_page_b(filters: Dict[str, List[Any]]) -> None:
     if not make_df.empty:
         ax.scatter(make_df["x"], make_df["y"], c="tab:green", label="MAKE", marker="o")
     if not miss_df.empty:
-        ax.scatter(miss_df["x"], miss_df["y"], c="tab:red", label="MISS", marker="x", alpha=0.7)
+        ax.scatter(
+            miss_df["x"],
+            miss_df["y"],
+            c="tab:red",
+            label="MISS",
+            marker="x",
+            alpha=0.7,
+        )
 
     ax.set_xlim(0, width)
     ax.set_ylim(height, 0)
