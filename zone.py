@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Final, Iterable, List, Sequence
 
 from PIL import Image
 
 from geom import Point, Polygon, point_in_polygon
+
+ZONE_LABELS: Final[tuple[str, str, str]] = ("PAINT", "TWO_PT", "THREE_PT")
+"""Primary zone labels shared across the application."""
 
 
 @dataclass(frozen=True)

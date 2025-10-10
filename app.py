@@ -1,7 +1,7 @@
 """Streamlit app for importing, classifying, and analysing basketball shots."""
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Literal
 
 import pandas as pd
 import streamlit as st
@@ -9,22 +9,22 @@ from PIL import Image
 
 try:
     import matplotlib.pyplot as plt
-except ModuleNotFoundError as exc:
+except ModuleNotFoundError:
     st.error(
         "matplotlib が必要です。環境にインストールされていない場合は `pip install matplotlib` を実行してください。"
     )
     st.stop()
 
-from components import sidebar_filters
+from components import render_manual_counter, sidebar_filters
 from storage import normalize_columns, read_csv, write_csv
-from zone import Zone, classify_point, load_default_zones
+from zone import ZONE_LABELS, Zone, classify_point, load_default_zones
 
 st.set_page_config(page_title="バスケ シュート集計", layout="wide")
 st.title("🏀 シュートエリア集計アプリ")
 
 
 def init_session_state(zones: Iterable[Zone]) -> None:
-    """Ensure session_state holds persistent data structures."""
+    """Ensure session_state holds persistent data structures for CSV workflow."""
 
     if "zones" not in st.session_state:
         st.session_state["zones"] = list(zones)
@@ -36,15 +36,79 @@ def init_session_state(zones: Iterable[Zone]) -> None:
         st.session_state["column_mapping"] = {}
 
 
-def get_default_zones() -> List[Zone]:
-    """Load default zones with error handling for missing assets."""
+def _fresh_manual_counts() -> Dict[str, Dict[str, int]]:
+    """Return a zero-initialised manual count structure."""
 
-    try:
-        return load_default_zones()
-    except FileNotFoundError as exc:
-        st.error(str(exc))
-        st.stop()
-    return []
+    return {label: {"make": 0, "miss": 0} for label in ZONE_LABELS}
+
+
+def init_manual_counts(force: bool = False) -> None:
+    """Initialise or reset manual tally counters stored in session_state."""
+
+    if force or "manual_counts" not in st.session_state:
+        st.session_state["manual_counts"] = _fresh_manual_counts()
+        return
+
+    counts = st.session_state["manual_counts"]
+    for label in ZONE_LABELS:
+        zone_counts = counts.get(label)
+        if zone_counts is None or not {"make", "miss"}.issubset(zone_counts):
+            counts[label] = {"make": 0, "miss": 0}
+
+
+def increment_count(zone: str, outcome: Literal["make", "miss"]) -> None:
+    """Increment the specified counter for a zone."""
+
+    if zone not in ZONE_LABELS:
+        raise ValueError(f"Unknown zone '{zone}'.")
+    if outcome not in {"make", "miss"}:
+        raise ValueError(f"Unknown outcome '{outcome}'.")
+
+    init_manual_counts()
+    st.session_state["manual_counts"][zone][outcome] += 1
+
+
+def get_manual_summary_df() -> pd.DataFrame:
+    """Aggregate manual tallies into a summary dataframe with totals."""
+
+    init_manual_counts()
+    counts = st.session_state["manual_counts"]
+    records: List[Dict[str, Any]] = []
+    total_make = 0
+    total_miss = 0
+
+    for zone in ZONE_LABELS:
+        zone_counts = counts.get(zone, {"make": 0, "miss": 0})
+        make_value = int(zone_counts.get("make", 0))
+        miss_value = int(zone_counts.get("miss", 0))
+        attempts = make_value + miss_value
+        fg_pct = 0.0 if attempts == 0 else make_value / attempts * 100
+
+        records.append(
+            {
+                "Zone": zone,
+                "Make": make_value,
+                "Miss": miss_value,
+                "Attempts": attempts,
+                "FG%": f"{fg_pct:.1f}%",
+            }
+        )
+        total_make += make_value
+        total_miss += miss_value
+
+    total_attempts = total_make + total_miss
+    total_pct = 0.0 if total_attempts == 0 else total_make / total_attempts * 100
+    records.append(
+        {
+            "Zone": "TOTAL",
+            "Make": total_make,
+            "Miss": total_miss,
+            "Attempts": total_attempts,
+            "FG%": f"{total_pct:.1f}%",
+        }
+    )
+
+    return pd.DataFrame.from_records(records)
 
 
 def create_demo_dataframe() -> pd.DataFrame:
@@ -246,19 +310,72 @@ def render_page_b(filters: Dict[str, List[Any]]) -> None:
     st.dataframe(filtered_df)
 
 
+def render_manual_tally() -> None:
+    """Render manual tally interface for quick counting by zone."""
+
+    init_manual_counts()
+
+    st.subheader("Manual Tally: エリア別手動カウント")
+    st.caption("成功・失敗ボタンで各エリアのカウントを更新します。")
+
+    try:
+        court_image = Image.open("court.png")
+    except FileNotFoundError:
+        st.error("court.png が見つかりません。アプリと同じディレクトリに配置してください。")
+    else:
+        left, center, right = st.columns([1, 2, 1])
+        with center:
+            st.image(court_image, use_column_width=True)
+
+    counts = st.session_state["manual_counts"]
+    columns = st.columns(len(ZONE_LABELS))
+    for column, zone in zip(columns, ZONE_LABELS):
+        with column:
+            render_manual_counter(
+                zone_name=zone,
+                counts=counts.get(zone, {"make": 0, "miss": 0}),
+                on_make=lambda z=zone: increment_count(z, "make"),
+                on_miss=lambda z=zone: increment_count(z, "miss"),
+            )
+
+    st.divider()
+    st.button(
+        "すべてリセット",
+        key="manual_counts_reset",
+        on_click=init_manual_counts,
+        kwargs={"force": True},
+    )
+
+
+def render_manual_summary() -> None:
+    """Display manual tally results in a tabular summary."""
+
+    st.subheader("Manual Summary: 手動集計結果")
+    summary_df = get_manual_summary_df()
+    st.table(summary_df.set_index("Zone"))
+
+
 def main() -> None:
     """Application entry point."""
 
     zones = get_default_zones()
     init_session_state(zones)
+    init_manual_counts()
 
     filters = sidebar_filters(st.session_state["shots"])
-    page = st.selectbox("表示ページ", ("Page A", "Page B"))
+    page = st.selectbox(
+        "表示ページ",
+        ("Page A", "Page B", "Manual Tally", "Manual Summary"),
+    )
 
     if page == "Page A":
         render_page_a(st.session_state["zones"])
-    else:
+    elif page == "Page B":
         render_page_b(filters)
+    elif page == "Manual Tally":
+        render_manual_tally()
+    else:
+        render_manual_summary()
 
 
 if __name__ == "__main__":
