@@ -63,6 +63,16 @@ def init_manual_counts(force: bool = False) -> None:
             counts[label] = {"make": 0, "miss": 0}
 
 
+def get_default_zones() -> List[Zone]:
+    """Load default zones and surface missing asset errors to the user."""
+
+    try:
+        return load_default_zones()
+    except FileNotFoundError as exc:
+        st.error(str(exc))
+        st.stop()
+
+
 def increment_count(zone: str, outcome: Literal["make", "miss"]) -> None:
     """Increment the specified counter for a zone."""
 
